@@ -14,13 +14,13 @@ import { QUEUES, getBoss, stopBoss } from "@aihot/backend/jobs/queue";
 
 after(async () => { await stopBoss(); await closeDb(); });
 
-test("new models require a launch classification as well as an official, new model event", () => {
-  const base = { category: "ai-models", tags: ["模型发布"], authority: 0, previous: null,
+test("daily metrics count events without a launch kind when the industry defines none", () => {
+  const base = { category: "announcements", tags: ["公告/业绩"], authority: 0, previous: null,
     entry: { sourceId: "official", firstParty: true } } as EditionEntry;
-  const rows = [base, { ...base, tags: ["评测/基准"] }, { ...base, tags: ["产品更新"] },
-    { ...base, category: "ai-products" }, { ...base, authority: 3 },
-    { ...base, previous: { key: "2026-09-30", title: "已报过的发布" } }, { ...base, tags: [] }];
-  assert.equal(dailyMetrics(rows).modelsReleased, 1);
+  const rows = [base, { ...base, tags: ["业绩"] }, { ...base, tags: ["回购增持"] },
+    { ...base, category: "market" }, { ...base, authority: 3 },
+    { ...base, previous: { key: "2026-09-30", title: "已报过的公告" } }, { ...base, tags: [] }];
+  assert.ok(!("modelsReleased" in dailyMetrics(rows)));
   assert.equal(dailyMetrics(rows).totalEvents, 7);
 });
 
@@ -30,7 +30,7 @@ test("category corrections revise every standard report atomically without selec
   await sql`INSERT INTO sources (id,name,kind,tier,participation_mode) VALUES (${sourceId},'Category fixture','rss','T1','editorial')`;
   const { articleId } = await upsertMaterial({ sourceId, url: `https://example.com/${sourceId}`, title: "开源推理工具", bodyText: "工具正文", bodyStatus: "ok", via: "fetch", publishedAt: new Date() });
   await sql`INSERT INTO analyses (article_id,input_revision,origin,relevance,category,tags,title_zh,summary_zh,score,selected)
-    VALUES (${articleId},1,'rule','pass','ai-models',ARRAY['模型发布','DeepSeek'],'开源推理工具','冻结摘要',88,true)`;
+    VALUES (${articleId},1,'rule','pass','announcements',ARRAY['模型发布','DeepSeek'],'开源推理工具','冻结摘要',88,true)`;
   const [story] = await sql`INSERT INTO stories (public_id,title) VALUES (gen_random_uuid(),'工具事件') RETURNING id`;
   const [fact] = await sql`INSERT INTO facts (public_id,title,story_id) VALUES (${`f-${tag()}`},'工具发布',${story!.id}) RETURNING id`;
   await sql`INSERT INTO fact_articles (fact_id,article_id,role) VALUES (${fact!.id},${articleId},'report')`;
@@ -43,7 +43,7 @@ test("category corrections revise every standard report atomically without selec
   for (const r of contents) await sql`INSERT INTO reports (kind,key,window_start,window_end,content,generated_at,origin)
     VALUES (${r.kind},${r.key},now(),now(),${sql.json(r.content as never)},now(),'imported')`;
   const [before] = await sql`SELECT selected,seat,score,visible_after,selected_ready_at FROM publications WHERE article_id=${articleId}`;
-  const change = (actor: string) => overrideFields(articleId, { fields: { category: "ai-products", tags: ["开源/仓库", "DeepSeek"] }, version: 0, reason: "工具不是模型" }, actor);
+  const change = (actor: string) => overrideFields(articleId, { fields: { category: "market", tags: ["行情/资金", "腾讯控股"] }, version: 0, reason: "行情波动不是公告" }, actor);
   await sql.unsafe(`CREATE FUNCTION reject_category_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
     IF NEW.actor = 'reject-category' THEN RAISE EXCEPTION 'category audit rejected'; END IF; RETURN NEW; END $$`);
   await sql.unsafe("CREATE TRIGGER reject_category_audit BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION reject_category_audit()");
@@ -62,12 +62,12 @@ test("category corrections revise every standard report atomically without selec
     const c = saved!.content;
     assert.equal(c.leadItemId, articleId);
     if (r.kind === "daily") {
-      assert.deepEqual(c.sections, [{ label: "产品发布/更新", items: [entry] }]);
+      assert.deepEqual(c.sections, [{ label: "行情与资金", items: [entry] }]);
       assert.equal(c.metrics.modelsReleased, 0);
       assert.deepEqual(c.highlights, [articleId]);
       assert.equal(c.lead.title, "冻结头条");
     } else {
-      assert.deepEqual(c.themes, [{ heading: "产品发布/更新", summary: null, storyRefs: [entry] }]);
+      assert.deepEqual(c.themes, [{ heading: "行情与资金", summary: null, storyRefs: [entry] }]);
       assert.deepEqual(c.storyOrder, [articleId]);
       assert.equal(c.overview, "保留总述");
     }
