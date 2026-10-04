@@ -1,0 +1,32 @@
+# AIHOT 正式配置（SA6400，已按你的环境预填）
+# 用记事本打开，把带 <需要你填> 的 4 项补上，另存为文件名 .env，再上传到 NAS。
+
+# ===== 镜像来源 =====
+# 注意：镜像名必须全小写（Docker 不允许大写字母）
+AIHOT_IMAGE=rangeone1/aihot-app:latest
+
+# ===== 站点地址 =====
+# <需要你填 1>：把 192.168.1.10 换成 SA6400 的实际局域网 IP，其余不动
+SITE_URL=http://192.168.1.10:3100
+
+# 端口。3000/3001 已被占用，用 3100
+PORT=3100
+
+# ===== 管理与安全 =====
+# <需要你填 2>：自己想一个，至少 12 位，登录 /admin 后台用
+ADMIN_PASSWORD=
+
+SESSION_SECRET=69c35c03885de3dfdd11d2adbfe85fe373eb203240902b13eaf4afdf007bcdf6
+IMG_PROXY_SIGN_SECRET=c03ee4a92f82f28085a5e589ffac708deaa5d86822e268d9e163f47519190521
+POSTGRES_PASSWORD=1d1fc21a91460135ad58da4f322cddfa43e84fd379a87a413d3d27c507676d6b
+
+# ===== 模型（阿里云百炼，已实测可用）=====
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# <需要你填 3>：百炼控制台创建的 API Key，sk- 开头
+LLM_API_KEY=
+LLM_MODEL=qwen3.7-plus
+LLM_EXTRA_JSON={"enable_thinking":false}
+
+# ===== 安全阀（必须为 true，否则不采集不调模型）=====
+COLLECT_ENABLED=true
+MODEL_CALLS_ENABLED=true
