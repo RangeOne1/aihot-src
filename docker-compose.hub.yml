@@ -17,6 +17,12 @@
 # 群晖 HTTPS 注意：不要用下面的 caddy profile（会占用 80/443，与 DSM 的 Web Station
 # 或反向代理冲突）。请用「控制面板 → 登录门户 → 高级 → 反向代理」转发到
 # http://127.0.0.1:3000，并在 .env 里设 PORT=127.0.0.1:3000、TRUST_PROXY=true。
+#
+# 数据持久化：本文件用绑定挂载，所有数据都落在本文件所在目录下，便于查看与备份：
+#   ./db     PostgreSQL 数据（容器内以 uid 999 运行，宿主目录需 chown 999:999）
+#   ./data   上传图片、图片缓存、本地备份（容器内以 uid 1000 node 运行，需 chown 1000:1000）
+#   ./caddy  证书（仅启用 https profile 时用到）
+# 首次启动前必须先建目录并设置好属主，否则容器会因 permission denied 起不来。
 name: aihot
 
 x-app: &app
@@ -34,7 +40,7 @@ x-backend: &backend
     LOCAL_ROUTER_URL: http://web:3000
     INGEST_RATE_LIMIT: ${INGEST_RATE_LIMIT:-10}
   volumes:
-    - data:/data
+    - ./data:/data
   depends_on:
     db:
       condition: service_healthy
@@ -48,7 +54,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aihot}
       POSTGRES_DB: aihot
     volumes:
-      - db:/var/lib/postgresql/data
+      - ./db:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aihot -d aihot"]
       interval: 5s
@@ -109,12 +115,7 @@ services:
     environment:
       SITE_DOMAIN: ${SITE_DOMAIN:-localhost}
     volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy:/data
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy:/data
     depends_on:
       - web
-
-volumes:
-  db: {}
-  data: {}
-  caddy: {}
