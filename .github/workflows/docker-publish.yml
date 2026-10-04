@@ -1,0 +1,73 @@
+# 把 AIHOT 镜像自动构建并推送到 Docker Hub
+#
+# 触发时机：
+#   - 推送到 main 分支          → 构建并推送 :latest
+#   - 推送 v* 标签（如 v1.0.0） → 构建并推送 :1.0.0 和 :1.0
+#   - 手动触发（Actions 页面）   → 同上
+#
+# 前置设置（只需做一次）：
+#   1. 仓库 Settings → Secrets and variables → Actions → New repository secret
+#      DOCKERHUB_USERNAME  = 你的 Docker Hub 用户名
+#      DOCKERHUB_TOKEN     = Docker Hub → Account Settings → Personal access tokens
+#                            → 勾选 Read & Write，生成后复制（只显示一次）
+#   2.（可选）Settings → Secrets and variables → Actions → Variables
+#      NPM_REGISTRY        = https://registry.npmmirror.com   （中国大陆加速，留空则用官方源）
+#
+# 之后 NAS 只需：docker compose pull && docker compose up -d
+
+name: Publish image to Docker Hub
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 生成镜像标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/aihot-app
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # 群晖 SA6400 是 x86_64，amd64 即可，构建最快。
+          # 若还想让 ARM 机型（DS223 等）也能拉，改成：linux/amd64,linux/arm64
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            NPM_REGISTRY=${{ vars.NPM_REGISTRY }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,120 @@
+# 从 Docker Hub 拉取镜像的部署配置（群晖 / 服务器推荐）
+#
+# 与官方 docker-compose.yml 的唯一区别：
+#   官方版  x-app: { build: ., image: aihot-app }   → 在本机构建镜像
+#   本文件  x-app: { image: ${AIHOT_IMAGE} }        → 直接从 Docker Hub 拉取，不在本机构建
+#
+# 好处：NAS 不用装 Node、不用 git clone、不用跑 npm ci，升级只需 pull + up。
+#
+# 使用前提：
+#   1. 已在 .env 里设置 AIHOT_IMAGE=你的DockerHub用户名/aihot-app:latest
+#   2. 镜像是公开仓库，或 NAS 已执行 docker login 登录了私有仓库
+#
+# NAS 上使用：
+#   docker compose -f docker-compose.hub.yml pull
+#   docker compose -f docker-compose.hub.yml up -d
+#
+# 群晖 HTTPS 注意：不要用下面的 caddy profile（会占用 80/443，与 DSM 的 Web Station
+# 或反向代理冲突）。请用「控制面板 → 登录门户 → 高级 → 反向代理」转发到
+# http://127.0.0.1:3000，并在 .env 里设 PORT=127.0.0.1:3000、TRUST_PROXY=true。
+name: aihot
+
+x-app: &app
+  image: ${AIHOT_IMAGE:?请在 .env 里设置 AIHOT_IMAGE=你的用户名/aihot-app:latest}
+  restart: unless-stopped
+
+x-backend: &backend
+  <<: *app
+  env_file: .env
+  environment: &backend-env
+    NODE_ENV: production
+    DATABASE_URL: postgres://aihot:${POSTGRES_PASSWORD:-aihot}@db:5432/aihot
+    AIHOT_DATA_DIR: /data
+    API_BASE_URL: http://api:3001
+    LOCAL_ROUTER_URL: http://web:3000
+    INGEST_RATE_LIMIT: ${INGEST_RATE_LIMIT:-10}
+  volumes:
+    - data:/data
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aihot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aihot}
+      POSTGRES_DB: aihot
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aihot -d aihot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # 跑数据库迁移和种子数据，然后退出。迁移脚本已打进镜像，拉镜像即可运行。
+  setup:
+    <<: *backend
+    restart: "no"
+    command: ["sh", "-c", "node scripts/migrate.ts && node scripts/seed.ts"]
+
+  api:
+    <<: *backend
+    command: ["node", "apps/api/src/main.ts"]
+    environment:
+      <<: *backend-env
+      API_HOST: 0.0.0.0
+      API_PORT: "3001"
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *backend
+    command: ["node", "apps/worker/src/main.ts"]
+    # 停止时留 210 秒让进行中的付费调用收尾，否则会变成「结果不明」并重复计费
+    stop_grace_period: 210s
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+  web:
+    <<: *app
+    command: ["node", "apps/web/server.ts"]
+    environment:
+      NODE_ENV: production
+      API_BASE_URL: http://api:3001
+      SITE_URL: ${SITE_URL:-http://localhost:3000}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      AIHOT_RELEASE: ${AIHOT_RELEASE:-}
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "3000"
+    ports:
+      - "${PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_started
+
+  # 仅在用 Caddy 做 HTTPS 时启用（群晖上一般不用，改用 DSM 自带反向代理）
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+    depends_on:
+      - web
+
+volumes:
+  db: {}
+  data: {}
+  caddy: {}
