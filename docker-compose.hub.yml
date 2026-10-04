@@ -1,28 +1,29 @@
-# 从 Docker Hub 拉取镜像的部署配置（群晖 / 服务器推荐）
+# AIHOT 部署配置 —— 从 Docker Hub 拉取镜像，数据绑定挂载到本目录
 #
-# 与官方 docker-compose.yml 的唯一区别：
-#   官方版  x-app: { build: ., image: aihot-app }   → 在本机构建镜像
-#   本文件  x-app: { image: ${AIHOT_IMAGE} }        → 直接从 Docker Hub 拉取，不在本机构建
+# 与官方 docker-compose.yml 的区别：
+#   1. x-app 去掉 build，改用 ${AIHOT_IMAGE} 从 Docker Hub 拉取
+#   2. 数据用绑定挂载（./db、./data）而不是命名卷，全部落在本文件所在目录
+#   3. 新增 prepare / prepare-db 两个一次性容器，自动建目录并修属主
 #
-# 好处：NAS 不用装 Node、不用 git clone、不用跑 npm ci，升级只需 pull + up。
+# 好处：NAS 不用装 Node、不用 clone 源码、不用编译；升级只需 pull + up；
+#       重装只需 up -d，目录和权限由 prepare 容器自动搞定。
 #
 # 使用前提：
-#   1. 已在 .env 里设置 AIHOT_IMAGE=你的DockerHub用户名/aihot-app:latest
-#   2. 镜像是公开仓库，或 NAS 已执行 docker login 登录了私有仓库
+#   1. .env 里已设 AIHOT_IMAGE=你的用户名/aihot-app:latest
+#   2. 同一目录下有 .env 文件
 #
-# NAS 上使用：
+# 部署（首次和重装都是这两条）：
 #   docker compose -f docker-compose.hub.yml pull
 #   docker compose -f docker-compose.hub.yml up -d
 #
-# 群晖 HTTPS 注意：不要用下面的 caddy profile（会占用 80/443，与 DSM 的 Web Station
-# 或反向代理冲突）。请用「控制面板 → 登录门户 → 高级 → 反向代理」转发到
-# http://127.0.0.1:3000，并在 .env 里设 PORT=127.0.0.1:3000、TRUST_PROXY=true。
+# 目录说明：
+#   ./db     PostgreSQL 数据，prepare-db 容器自动设为 uid 999
+#   ./data   上传图片与缓存，prepare 容器自动设为 uid 1000（node）
+#   ./caddy  证书，仅启用 https profile 时用到
 #
-# 数据持久化：本文件用绑定挂载，所有数据都落在本文件所在目录下，便于查看与备份：
-#   ./db     PostgreSQL 数据（容器内以 uid 999 运行，宿主目录需 chown 999:999）
-#   ./data   上传图片、图片缓存、本地备份（容器内以 uid 1000 node 运行，需 chown 1000:1000）
-#   ./caddy  证书（仅启用 https profile 时用到）
-# 首次启动前必须先建目录并设置好属主，否则容器会因 permission denied 起不来。
+# 群晖 HTTPS：不要用下面的 caddy profile（占 80/443，会撞 DSM 的 Web Station）。
+#   改用「控制面板 → 登录门户 → 高级 → 反向代理」转发到 http://127.0.0.1:3100，
+#   并在 .env 里设 PORT=127.0.0.1:3100、TRUST_PROXY=true、SITE_URL=https://你的域名。
 name: aihot
 
 x-app: &app
@@ -46,6 +47,28 @@ x-backend: &backend
       condition: service_healthy
 
 services:
+  # 一次性容器：把 ./data 交给容器内的 node 用户（uid 1000）。
+  # 绑定挂载的目录默认属主是 root，不修的话 api/worker/web 会因 permission denied 起不来。
+  prepare:
+    image: ${AIHOT_IMAGE:?请在 .env 里设置 AIHOT_IMAGE}
+    user: "0"
+    restart: "no"
+    volumes:
+      - ./data:/data
+    command: ["sh", "-c", "mkdir -p /data/uploads && chown -R node:node /data"]
+    network_mode: none
+
+  # 一次性容器：把 ./db 交给容器内的 postgres 用户（uid 999）。
+  # 用官方 postgres 镜像来 chown，按镜像里的真实用户设，不用记数字。
+  prepare-db:
+    image: postgres:17-alpine
+    user: "0"
+    restart: "no"
+    volumes:
+      - ./db:/var/lib/postgresql/data
+    command: ["sh", "-c", "chown -R postgres:postgres /var/lib/postgresql/data"]
+    network_mode: none
+
   db:
     image: postgres:17-alpine
     restart: unless-stopped
@@ -66,6 +89,13 @@ services:
     <<: *backend
     restart: "no"
     command: ["sh", "-c", "node scripts/migrate.ts && node scripts/seed.ts"]
+    depends_on:
+      prepare:
+        condition: service_completed_successfully
+      prepare-db:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
 
   api:
     <<: *backend
