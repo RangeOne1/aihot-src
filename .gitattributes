@@ -1,0 +1,5 @@
+# 这几个文件会直接放到 Linux（群晖 SA6400）上使用，强制 LF 换行，
+# 避免在 Windows 上编辑后变成 CRLF 导致 YAML 解析异常。
+docker-compose.hub.yml text eol=lf
+.github/workflows/docker-publish.yml text eol=lf
+env.sa6400.example text eol=lf
